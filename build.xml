@@ -1,0 +1,182 @@
+<?xml version="1.0"?>
+
+<project name="demo" default="main">
+	<property file="build.properties" />
+	<property name="build.jsPath" value="${build.dir}/${base.js.path}" />
+	<property name="build.cssPath" value="${build.dir}/${base.css.path}" />
+
+	<!-- Delete the Publish directory to start from scratch -->
+	<target name="build.delete">
+		<echo message="${build.dir}" />
+		<delete dir="${build.dir}" />
+	</target>
+
+	<!-- Create the Build Directory -->
+	<target name="build.createDir">
+		<mkdir dir="${build.dir}" />
+	</target>
+
+	<target name="copy.all">
+		<copy todir="${build.dir}">
+			<fileset dir="${base.dir}">
+				<exclude name="${build.publishName}" />
+				<exclude name="build/" />
+			</fileset>
+		</copy>
+	</target>
+
+	<target name="minify.loop">
+		<foreach param="filename" absparam="absfilename" target="minify.file">
+			<fileset dir="${build.dir}" includes="**/*.js" />
+		</foreach>
+
+		<foreach param="filename" absparam="absfilename" target="minify.file">
+			<fileset dir="${build.dir}" includes="**/*.css" />
+		</foreach>
+		
+	</target>
+
+	<target name="minify.file">
+		<exec command="java -jar yuicompressor-2.4.6.jar ${absfilename} -o ${absfilename}" />
+	</target>
+
+
+	<!-- Concatenate JS -->
+	<target name="js.concat">
+		<echo msg="Concatenating JavaScript files." />
+		<mkdir dir="${build.jsPath}" />
+		<append destfile="${build.jsPath}/${js.concat.min}">
+			<filelist dir="${base.dir}" files="${js.linkPaths}" />
+		</append>
+	</target>
+
+	<!-- Concatenate CSS -->
+	<target name="css.concat">
+		<echo msg="Concatenating CSS files." />
+		<mkdir dir="${build.cssPath}" />
+		<append destfile="${build.cssPath}/${css.concat.min}">
+			<filelist dir="${base.dir}" files="${css.linkPaths}" />
+		</append>
+	</target>
+
+	<target name="html.minifyLoop">
+		<foreach param="filename" absparam="absfilename" target="html.minify">
+			<fileset dir="${build.dir}" includes="**/*.html, **/*.php">
+				<contains text="&lt;body>" />
+			</fileset>
+		</foreach>
+	</target>
+
+	<!-- Minify HTML Files -->
+	<target name="html.minify">
+		<exec command="java -jar htmlcompressor-1.4.3.jar ${absfilename} -o ${absfilename}" />
+	</target>
+
+	<!-- Update HTML Files with new Links -->
+	<target name="assets.update">
+		<echo message="Replacing old script links with new ones." />
+		<reflexive>
+			<fileset dir="${build.dir}" includes="**/*.html, **/*.php" />	
+			 <filterchain>
+			    <replaceregexp>
+			      <regexp pattern="&lt;!--\s*js\s*-->[\s\S]+?&lt;!--\s*end js\s*-->" replace="&lt;script src='./${base.js.path}/${js.concat.min}/${js.concat.min}'>&lt;/script>" />
+
+			    <regexp pattern="&lt;!--\s*css\s*-->[\s\S]+?&lt;!--\s*end css\s*-->" replace="&lt;link rel='stylesheet' href='./${base.css.path}/${css.concat.min}' />" />
+			    </replaceregexp>
+			  </filterchain>
+		</reflexive>
+		
+	</target>
+
+	<target name="assets.createLinks">
+		<adhoc-task name="get_link_paths">
+			<![CDATA[
+			class Links extends Task {
+				private $type;
+				private $property;
+				private $files;
+				private $links;
+
+				function setType($type) {
+					$this->type = $type;
+				}
+
+				function setProperty($property) {
+					$this->property = $property;
+				}
+
+				function main() {
+					$this->getFiles();
+
+					foreach($this->files as $file) {
+						$links = $this->findLinks($file);
+						if ( false !== $links ) {
+							$this->links .= empty($this->links) ? $links : ",$links";
+						}
+					}
+
+					// css/style2.css,css/style.css,css/style3.css,css/style2.css,css/style.css
+					$this->links = implode(',', array_unique(explode(',', $this->links)));
+
+					$this->project->setProperty($this->property, $this->links);
+				}
+
+				function getFiles() {
+					// Get list of all HTML and PHP files in the base directory.
+					$objects = new RecursiveIteratorIterator(new RecursiveDirectoryIterator('${base.dir}'));
+					$objects = new RegexIterator($objects, '/\.(?:html|php)$/i', RecursiveRegexIterator::GET_MATCH);
+
+					$files = array();
+					foreach($objects as $name => $object) {
+						$files[] = str_replace('../', '', $name);
+					}
+
+					$this->files = $files;
+				}
+
+				function findLinks($file) {
+					$file = file_get_contents("${base.dir}/$file");
+					$this->log("Stripping out the '$this->type' path.");
+					$links = trim(preg_replace('/[\s\S]+?<!--\s*' . $this->type . '\s*-->([\s\S]+)<!--\s*end ' . $this->type . '\s*-->[\s\S]+/', "$1", $file));
+
+					// If the returned val from the preg_replace is the same, there's no match. // Remove this one from the list. It does not have script or link tags.
+
+					if ( $links === $file ) {
+						return false;
+					}
+
+					if ( $this->type === 'css' ) {
+						$links = preg_replace("/<link.+?href=[\"']?([^'\"]+)['\"]?[^>]+>/i", "$1", $links);
+					} else if ( $this->type === 'js' ) {
+						$links = preg_replace("/<script.+?src=[\"']?([^\"']+)[\"']?[\s\S]+?<\/script>/", "$1", $links);
+					}
+
+					$links = preg_replace('/\s+/', ',', $links);
+					return $links;
+				}
+			}
+			]]>
+		</adhoc-task>
+	
+	</target>
+
+	<target name="assets.getPaths" depends="assets.createLinks">
+		<get_link_paths type="js" property="js.linkPaths" />
+		<get_link_paths type="css" property="css.linkPaths" />
+	</target>
+
+	<!-- Delete all files that have been concatenated. -->
+	<target name="delete.unnecessaryFiles">
+		<echo message="Deleting any files that aren't necessary for your build directory." />
+		<delete>
+			<filelist dir="${build.dir}" files="${js.linkPaths}" />
+			<filelist dir="${build.dir}" files="${css.linkPaths}" />
+		</delete>
+	</target>
+
+
+	<target name="main" depends="build.delete, build.createDir, assets.getPaths, copy.all, js.concat, css.concat, minify.loop, assets.update, html.minifyLoop, delete.unnecessaryFiles">
+	</target>
+
+
+</project>
