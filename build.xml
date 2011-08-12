@@ -27,13 +27,9 @@
 
 	<target name="minify.loop">
 		<foreach param="filename" absparam="absfilename" target="minify.file">
-			<fileset dir="${build.dir}" includes="**/*.js" />
+			<fileset dir="${build.jsPath}" includes="${js.concat.min}" />
+			<fileset dir="${build.cssPath}" includes="${css.concat.min}" />
 		</foreach>
-
-		<foreach param="filename" absparam="absfilename" target="minify.file">
-			<fileset dir="${build.dir}" includes="**/*.css" />
-		</foreach>
-		
 	</target>
 
 	<target name="minify.file">
